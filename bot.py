@@ -29,7 +29,7 @@ CATEGORIES = [
 
 
 def get_sheet():
-    client = gspread.service_account(filename="credentials.json")
+    client = gspread.service_account(filename="/app/credentials.json")
     spreadsheet = client.open_by_key(SHEET_ID)
     return spreadsheet.worksheet(SHEET_NAME)
 
