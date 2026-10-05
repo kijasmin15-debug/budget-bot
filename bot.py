@@ -11,10 +11,8 @@ from telegram.ext import (
     filters,
 )
 
-
 SHEET_ID = "1OMWBEVsww6ftRVbYQOME7OpLiq9vk4I1_9kBFrBULCE"
 SHEET_NAME = "Лист2"
-
 
 CATEGORIES = [
     "🏠 Квартплата",
@@ -25,11 +23,19 @@ CATEGORIES = [
     "💰 Отложить",
     "🎭 Развлечения",
     "⚠️ Незапланированные траты",
+    "💳 Платежи",
+    "❤️ Здоровье",
+    "🚗 Транспорт",
+    "👩 Лена",
 ]
+
+user_data = {}
 
 
 def get_sheet():
-    client = gspread.service_account(filename="/app/credentials.json")
+    client = gspread.service_account(
+        filename="/app/credentials.json"
+    )
     spreadsheet = client.open_by_key(SHEET_ID)
     return spreadsheet.worksheet(SHEET_NAME)
 
@@ -37,14 +43,15 @@ def get_sheet():
 def main_keyboard():
     return ReplyKeyboardMarkup(
         [
-            ["➕ Доход", "➖ Расход"],
+            ["➕ Доход"],
+            ["➖ Расход"],
             ["📊 Итоги", "📂 Категории"],
         ],
         resize_keyboard=True,
     )
 
 
-def category_keyboard():
+def categories_keyboard():
     buttons = []
 
     for i in range(0, len(CATEGORIES), 2):
@@ -59,235 +66,236 @@ def category_keyboard():
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    context.user_data.clear()
+    user_data.pop(update.effective_user.id, None)
 
     await update.message.reply_text(
-        "Привет! 👋\n\n"
-        "Я помогу вести твой бюджет.\n"
-        "Выбери действие:",
+        "Привет! 😊\n\nВыбери действие кнопкой ниже:",
         reply_markup=main_keyboard(),
     )
 
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "📂 Выбери категорию:",
+        reply_markup=categories_keyboard(),
+    )
 
-    # Отмена
-    if text == "↩️ Отмена":
-        context.user_data.clear()
+
+async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data[update.effective_user.id] = {
+        "action": "expense"
+    }
+
+    await update.message.reply_text(
+        "📂 Выбери категорию:",
+        reply_markup=categories_keyboard(),
+    )
+
+
+async def income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data[update.effective_user.id] = {
+        "action": "income"
+    }
+
+    await update.message.reply_text(
+        "💰 Введи сумму дохода:"
+    )
+
+
+async def totals(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    try:
+        sheet = get_sheet()
+        records = sheet.get_all_records()
+
+        current_month = datetime.now().strftime("%m.%Y")
+
+        total_income = 0
+        total_expense = 0
+
+        for row in records:
+            date_value = str(row.get("Дата", ""))
+
+            if date_value.endswith(current_month):
+                try:
+                    total_income += float(
+                        row.get("Доход", 0) or 0
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+                try:
+                    total_expense += float(
+                        row.get("Расход", 0) or 0
+                    )
+                except (ValueError, TypeError):
+                    pass
+
+        balance = total_income - total_expense
 
         await update.message.reply_text(
-            "Отменено.\n\nГлавное меню:",
+            f"📊 Итоги за {current_month}\n\n"
+            f"Доходы: {total_income:.2f}\n"
+            f"Расходы: {total_expense:.2f}\n"
+            f"Баланс: {balance:.2f}"
+        )
+
+    except Exception as e:
+        print(f"Ошибка итогов: {e}")
+
+        await update.message.reply_text(
+            "😔 Не удалось получить данные из таблицы."
+        )
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    text = update.message.text
+
+    if text == "➕ Доход":
+        await income_start(update, context)
+        return
+
+    if text == "➖ Расход":
+        await expense_start(update, context)
+        return
+
+    if text == "📊 Итоги":
+        await totals(update, context)
+        return
+
+    if text == "📂 Категории":
+        await categories(update, context)
+        return
+
+    if text == "↩️ Отмена":
+        user_data.pop(user_id, None)
+
+        await update.message.reply_text(
+            "Отменено.",
             reply_markup=main_keyboard(),
         )
         return
 
-    # Доход
-    if text == "➕ Доход":
-        context.user_data["type"] = "income"
-        context.user_data["step"] = "amount"
+    data = user_data.get(user_id)
 
-        await update.message.reply_text(
-            "💰 Введи сумму дохода:",
-            reply_markup=ReplyKeyboardMarkup(
-                [["↩️ Отмена"]],
-                resize_keyboard=True,
-            ),
-        )
+    if not data:
         return
 
-    # Расход
-    if text == "➖ Расход":
-        context.user_data["type"] = "expense"
-        context.user_data["step"] = "category"
-
-        await update.message.reply_text(
-            "📂 Выбери категорию:",
-            reply_markup=category_keyboard(),
-        )
-        return
-
-    # Категории
-    if text == "📂 Категории":
-        await update.message.reply_text(
-            "📂 Твои категории:",
-            reply_markup=category_keyboard(),
-        )
-        return
-
-    # Итоги
-    if text == "📊 Итоги":
+    # ДОХОД
+    if data.get("action") == "income" and "amount" not in data:
         try:
-            sheet = get_sheet()
-            rows = sheet.get_all_values()
-
-            total_income = 0
-            total_expense = 0
-
-            current_month = datetime.now().strftime("%m.%Y")
-
-            for row in rows[1:]:
-                if not row:
-                    continue
-
-                date = row[0] if len(row) > 0 else ""
-
-                if current_month not in date:
-                    continue
-
-                try:
-                    if len(row) > 3 and row[3]:
-                        total_income += float(
-                            str(row[3]).replace(",", ".").replace(" ", "")
-                        )
-                except ValueError:
-                    pass
-
-                try:
-                    if len(row) > 4 and row[4]:
-                        total_expense += float(
-                            str(row[4]).replace(",", ".").replace(" ", "")
-                        )
-                except ValueError:
-                    pass
-
-            balance = total_income - total_expense
+            amount = float(text.replace(",", "."))
+            data["amount"] = amount
 
             await update.message.reply_text(
-                "📊 Итоги за текущий месяц\n\n"
-                f"💰 Доходы: {total_income:,.2f}\n"
-                f"💸 Расходы: {total_expense:,.2f}\n"
-                f"🏦 Остаток: {balance:,.2f}",
-                reply_markup=main_keyboard(),
+                "📝 Напиши описание дохода.\n\n"
+                "Если описание не нужно — напиши: -"
             )
 
-        except Exception as e:
-            print("ОШИБКА:", e)
-
-            await update.message.reply_text(
-                "😔 Не удалось получить итоги.\n"
-                "Посмотри ошибку в чёрном окне.",
-                reply_markup=main_keyboard(),
-            )
-
-        return
-
-    # Выбор категории
-    step = context.user_data.get("step")
-
-    if step == "category":
-        if text not in CATEGORIES:
-            await update.message.reply_text(
-                "Пожалуйста, выбери категорию кнопкой.",
-                reply_markup=category_keyboard(),
-            )
-            return
-
-        context.user_data["category"] = text
-        context.user_data["step"] = "amount"
-
-        await update.message.reply_text(
-            "💵 Теперь введи сумму:",
-            reply_markup=ReplyKeyboardMarkup(
-                [["↩️ Отмена"]],
-                resize_keyboard=True,
-            ),
-        )
-        return
-
-    # Ввод суммы
-    if step == "amount":
-        try:
-            amount = float(
-                text.replace(" ", "").replace(",", ".")
-            )
         except ValueError:
             await update.message.reply_text(
-                "Пожалуйста, введи сумму числом.\n"
-                "Например: 1500",
+                "Введите сумму числом, например: 500"
             )
-            return
 
-        if amount <= 0:
-            await update.message.reply_text(
-                "Сумма должна быть больше нуля."
-            )
-            return
-
-        context.user_data["amount"] = amount
-
-        if context.user_data["type"] == "income":
-            context.user_data["category"] = "Доход"
-
-        context.user_data["step"] = "description"
-
-        await update.message.reply_text(
-            "📝 Напиши описание.\n\n"
-            "Например: зарплата, продукты на неделю.\n\n"
-            "Если описание не нужно — напиши: -",
-            reply_markup=ReplyKeyboardMarkup(
-                [["↩️ Отмена"]],
-                resize_keyboard=True,
-            ),
-        )
         return
 
-    # Ввод описания
-    if step == "description":
-        description = text
-
-        if description == "-":
-            description = ""
+    if data.get("action") == "income" and "amount" in data:
+        description = "" if text == "-" else text
 
         try:
             sheet = get_sheet()
+            today = datetime.now().strftime("%d.%m.%Y")
 
-            date = datetime.now().strftime("%d.%m.%Y")
-
-            income = ""
-            expense = ""
-
-            if context.user_data["type"] == "income":
-                income = context.user_data["amount"]
-            else:
-                expense = context.user_data["amount"]
-
-            row = [
-                date,
-                context.user_data["category"],
-                description,
-                income,
-                expense,
-                "",
-            ]
-
-            sheet.append_row(row)
+            sheet.append_row(
+                [
+                    today,
+                    "💰 Доход",
+                    description,
+                    data["amount"],
+                    "",
+                ]
+            )
 
             await update.message.reply_text(
-                "✅ Записала в таблицу!\n\n"
-                f"📅 {date}\n"
-                f"📂 {context.user_data['category']}\n"
-                f"💵 {context.user_data['amount']}\n"
-                f"📝 {description if description else 'Без описания'}",
+                "✅ Доход записан в таблицу!",
                 reply_markup=main_keyboard(),
             )
 
-            context.user_data.clear()
+            user_data.pop(user_id, None)
 
         except Exception as e:
-            print("ОШИБКА:", e)
+            print(f"Ошибка записи дохода: {e}")
 
             await update.message.reply_text(
-                "😔 Не удалось записать данные в таблицу.\n"
-                "Посмотри ошибку в чёрном окне."
+                "😔 Не удалось записать доход в таблицу."
             )
 
         return
 
-    await update.message.reply_text(
-        "Выбери действие кнопкой ниже:",
-        reply_markup=main_keyboard(),
-    )
+    # РАСХОД — КАТЕГОРИЯ
+    if data.get("action") == "expense" and "category" not in data:
+        if text not in CATEGORIES:
+            await update.message.reply_text(
+                "Пожалуйста, выбери категорию кнопкой."
+            )
+            return
+
+        data["category"] = text
+
+        await update.message.reply_text(
+            "💰 Теперь введи сумму:"
+        )
+        return
+
+    # РАСХОД — СУММА
+    if data.get("action") == "expense" and "amount" not in data:
+        try:
+            amount = float(text.replace(",", "."))
+            data["amount"] = amount
+
+            await update.message.reply_text(
+                "📝 Напиши описание.\n\n"
+                "Если описание не нужно — напиши: -"
+            )
+
+        except ValueError:
+            await update.message.reply_text(
+                "Введите сумму числом, например: 500"
+            )
+
+        return
+
+    # РАСХОД — ЗАПИСЬ
+    if data.get("action") == "expense" and "amount" in data:
+        description = "" if text == "-" else text
+
+        try:
+            sheet = get_sheet()
+            today = datetime.now().strftime("%d.%m.%Y")
+
+            sheet.append_row(
+                [
+                    today,
+                    data["category"],
+                    description,
+                    "",
+                    data["amount"],
+                ]
+            )
+
+            await update.message.reply_text(
+                "✅ Записала в таблицу!",
+                reply_markup=main_keyboard(),
+            )
+
+            user_data.pop(user_id, None)
+
+        except Exception as e:
+            print(f"Ошибка записи: {e}")
+
+            await update.message.reply_text(
+                "😔 Не удалось записать данные в таблицу."
+            )
 
 
 def main():
@@ -299,12 +307,14 @@ def main():
 
     app = Application.builder().token(token).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
 
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            handle_message,
+            handle_message
         )
     )
 
