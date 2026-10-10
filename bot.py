@@ -82,9 +82,7 @@ async def categories(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data[update.effective_user.id] = {
-        "action": "expense"
-    }
+    user_data[update.effective_user.id] = {"action": "expense"}
 
     await update.message.reply_text(
         "📂 Выбери категорию:",
@@ -93,9 +91,7 @@ async def expense_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_data[update.effective_user.id] = {
-        "action": "income"
-    }
+    user_data[update.effective_user.id] = {"action": "income"}
 
     await update.message.reply_text(
         "💰 Введи сумму дохода:"
@@ -105,30 +101,43 @@ async def income_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def totals(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         sheet = get_sheet()
-        records = sheet.get_all_records()
+        rows = sheet.get_all_values()
 
         current_month = datetime.now().strftime("%m.%Y")
 
         total_income = 0
         total_expense = 0
 
-        for row in records:
-            date_value = str(row.get("Дата", ""))
+        for row in rows[1:]:
+            if len(row) < 5:
+                continue
 
-            if date_value.endswith(current_month):
-                try:
-                    total_income += float(
-                        row.get("Доход", 0) or 0
-                    )
-                except (ValueError, TypeError):
-                    pass
+            # Столбец A — дата.
+            date_value = str(row[0]).strip()
 
-                try:
-                    total_expense += float(
-                        row.get("Расход", 0) or 0
-                    )
-                except (ValueError, TypeError):
-                    pass
+            try:
+                date = datetime.strptime(date_value, "%d.%m.%Y")
+            except ValueError:
+                continue
+
+            if date.strftime("%m.%Y") != current_month:
+                continue
+
+            # Столбец D — доход.
+            try:
+                income = str(row[3]).replace(" ", "").replace(",", ".")
+                if income:
+                    total_income += float(income)
+            except ValueError:
+                pass
+
+            # Столбец E — расход.
+            try:
+                expense = str(row[4]).replace(" ", "").replace(",", ".")
+                if expense:
+                    total_expense += float(expense)
+            except ValueError:
+                pass
 
         balance = total_income - total_expense
 
@@ -141,7 +150,6 @@ async def totals(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     except Exception as e:
         print(f"Ошибка итогов: {e}")
-
         await update.message.reply_text(
             "😔 Не удалось получить данные из таблицы."
         )
@@ -169,7 +177,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if text == "↩️ Отмена":
         user_data.pop(user_id, None)
-
         await update.message.reply_text(
             "Отменено.",
             reply_markup=main_keyboard(),
@@ -181,7 +188,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not data:
         return
 
-    # ДОХОД
+    # Доход — ввод суммы.
     if data.get("action") == "income" and "amount" not in data:
         try:
             amount = float(text.replace(",", "."))
@@ -191,14 +198,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📝 Напиши описание дохода.\n\n"
                 "Если описание не нужно — напиши: -"
             )
-
         except ValueError:
             await update.message.reply_text(
                 "Введите сумму числом, например: 500"
             )
-
         return
 
+    # Доход — запись в таблицу.
     if data.get("action") == "income" and "amount" in data:
         description = "" if text == "-" else text
 
@@ -207,32 +213,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             today = datetime.now().strftime("%d.%m.%Y")
 
             sheet.append_row(
-                [
-                    today,
-                    "💰 Доход",
-                    description,
-                    data["amount"],
-                    "",
-                ]
+                [today, "💰 Доход", description, data["amount"], ""]
             )
 
             await update.message.reply_text(
                 "✅ Доход записан в таблицу!",
                 reply_markup=main_keyboard(),
             )
-
             user_data.pop(user_id, None)
 
         except Exception as e:
             print(f"Ошибка записи дохода: {e}")
-
             await update.message.reply_text(
                 "😔 Не удалось записать доход в таблицу."
             )
-
         return
 
-    # РАСХОД — КАТЕГОРИЯ
+    # Расход — выбор категории.
     if data.get("action") == "expense" and "category" not in data:
         if text not in CATEGORIES:
             await update.message.reply_text(
@@ -241,13 +238,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         data["category"] = text
-
-        await update.message.reply_text(
-            "💰 Теперь введи сумму:"
-        )
+        await update.message.reply_text("💰 Теперь введи сумму:")
         return
 
-    # РАСХОД — СУММА
+    # Расход — ввод суммы.
     if data.get("action") == "expense" and "amount" not in data:
         try:
             amount = float(text.replace(",", "."))
@@ -257,15 +251,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "📝 Напиши описание.\n\n"
                 "Если описание не нужно — напиши: -"
             )
-
         except ValueError:
             await update.message.reply_text(
                 "Введите сумму числом, например: 500"
             )
-
         return
 
-    # РАСХОД — ЗАПИСЬ
+    # Расход — запись в таблицу.
     if data.get("action") == "expense" and "amount" in data:
         description = "" if text == "-" else text
 
@@ -287,12 +279,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "✅ Записала в таблицу!",
                 reply_markup=main_keyboard(),
             )
-
             user_data.pop(user_id, None)
 
         except Exception as e:
-            print(f"Ошибка записи: {e}")
-
+            print(f"Ошибка записи расхода: {e}")
             await update.message.reply_text(
                 "😔 Не удалось записать данные в таблицу."
             )
@@ -307,19 +297,12 @@ def main():
 
     app = Application.builder().token(token).build()
 
+    app.add_handler(CommandHandler("start", start))
     app.add_handler(
-        CommandHandler("start", start)
-    )
-
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            handle_message
-        )
+        MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message)
     )
 
     print("Бот запущен!")
-
     app.run_polling()
 
 
